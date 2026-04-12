@@ -412,7 +412,7 @@ export default {
         }
 
         const successMessage = await getVerificationSuccessMessage();
-        await sendMessageToUser(chatId, `${successMessage}\nPlease wait for our reply.`);
+        await sendMessageToUser(chatId, `${successMessage}`);
         const userInfo = await getUserInfo(chatId);
         await ensureUserTopic(chatId, userInfo);
         return;
