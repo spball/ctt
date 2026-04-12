@@ -315,7 +315,7 @@ export default {
       }
 
       if (userState.is_blocked) {
-        await sendMessageToUser(chatId, "您已被拉黑，无法发送消息。请联系管理员解除拉黑。");
+        await sendMessageToUser(chatId, "You have been blocked and cannot send messages.");
         return;
       }
 
@@ -342,7 +342,7 @@ export default {
             
             if (isCodeExpired) {
               // 如果验证码已过期，重新发送验证码
-              await sendMessageToUser(chatId, '验证码已过期，正在为您发送新的验证码...');
+              await sendMessageToUser(chatId, 'The verification code has expired. A new verification code is being sent to you.');
               await env.D1.prepare('UPDATE user_states SET verification_code = NULL, code_expiry = NULL, is_verifying = FALSE WHERE chat_id = ?')
                 .bind(chatId)
                 .run();
@@ -382,24 +382,24 @@ export default {
               try {
                 await handleVerification(chatId, 0);
               } catch (verificationError) {
-                console.error(`发送新验证码失败: ${verificationError.message}`);
+                console.error(`Error sending verification code: ${verificationError.message}`);
                 // 如果发送验证码失败，则再次尝试
                 setTimeout(async () => {
                   try {
                     await handleVerification(chatId, 0);
                   } catch (retryError) {
-                    console.error(`重试发送验证码仍失败: ${retryError.message}`);
-                    await sendMessageToUser(chatId, '发送验证码失败，请发送任意消息重试');
+                    console.error(`Error sending verification code after retry: ${retryError.message}`);
+                    await sendMessageToUser(chatId, 'Error sending verification code, send any message to retry.');
                   }
                 }, 1000);
               }
               return;
             } else {
-              await sendMessageToUser(chatId, `请完成验证后发送消息"${text || '您的具体信息'}"。`);
+              await sendMessageToUser(chatId, `Please verify to send "${text || '您的具体信息'}"`);
             }
             return;
           }
-          await sendMessageToUser(chatId, `请完成验证后发送消息"${text || '您的具体信息'}"。`);
+          await sendMessageToUser(chatId, `Please verify to send "${text || '您的具体信息'}"。`);
           await handleVerification(chatId, messageId);
           return;
         }
@@ -407,12 +407,12 @@ export default {
 
       if (text === '/start') {
         if (await checkStartCommandRate(chatId)) {
-          await sendMessageToUser(chatId, "您发送 /start 命令过于频繁，请稍后再试！");
+          await sendMessageToUser(chatId, "Too many attempts, please try again later.");
           return;
         }
 
         const successMessage = await getVerificationSuccessMessage();
-        await sendMessageToUser(chatId, `${successMessage}\n你好，欢迎使用私聊机器人，现在发送信息吧！`);
+        await sendMessageToUser(chatId, `${successMessage}\nYou can send a message now. Please wait for our reply.`);
         const userInfo = await getUserInfo(chatId);
         await ensureUserTopic(chatId, userInfo);
         return;
@@ -420,13 +420,13 @@ export default {
 
       const userInfo = await getUserInfo(chatId);
       if (!userInfo) {
-        await sendMessageToUser(chatId, "无法获取用户信息，请稍后再试或联系管理员。");
+        await sendMessageToUser(chatId, "Unable to retrieve user information. Please try again later.");
         return;
       }
 
       let topicId = await ensureUserTopic(chatId, userInfo);
       if (!topicId) {
-        await sendMessageToUser(chatId, "无法创建话题，请稍后再试或联系管理员。");
+        await sendMessageToUser(chatId, "Unable to create a topic. Please try again later.");
         return;
       }
 
@@ -436,7 +436,7 @@ export default {
         topicIdCache.set(chatId, undefined);
         topicId = await ensureUserTopic(chatId, userInfo);
         if (!topicId) {
-          await sendMessageToUser(chatId, "无法重新创建话题，请稍后再试或联系管理员。");
+          await sendMessageToUser(chatId, "Unable to recreate the topic. Please try again later.");
           return;
         }
       }
