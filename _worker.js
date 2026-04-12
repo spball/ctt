@@ -820,7 +820,7 @@ export default {
             .run();
 
           const successMessage = await getVerificationSuccessMessage();
-          await sendMessageToUser(chatId, `${successMessage}\nYou can start messaging now.`);
+          await sendMessageToUser(chatId, `${successMessage}`);
           const userInfo = await getUserInfo(chatId);
           await ensureUserTopic(chatId, userInfo);
         } else {
