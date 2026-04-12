@@ -587,16 +587,16 @@ export default {
 
     async function getVerificationSuccessMessage() {
       const userRawEnabled = (await getSetting('user_raw_enabled', env.D1)) === 'true';
-      if (!userRawEnabled) return '验证成功！您现在可以与我聊天。';
+      if (!userRawEnabled) return 'Verification successful! You can start messaging now.';
 
-      const response = await fetch('https://raw.githubusercontent.com/iawooo/ctt/refs/heads/main/CFTeleTrans/start.md');
-      if (!response.ok) return '验证成功！您现在可以与我聊天。';
+      const response = await fetch('https://raw.githubusercontent.com/spball/ctt/refs/heads/main/CFTeleTrans/start.md');
+      if (!response.ok) return 'Verification successful! You can start messaging now.';
       const message = await response.text();
-      return message.trim() || '验证成功！您现在可以与我聊天。';
+      return message.trim() || 'Verification successful! You can start messaging now.';
     }
 
     async function getNotificationContent() {
-      const response = await fetch('https://raw.githubusercontent.com/iawooo/ctt/refs/heads/main/CFTeleTrans/notification.md');
+      const response = await fetch('https://raw.githubusercontent.com/spball/ctt/refs/heads/main/CFTeleTrans/notification.md');
       if (!response.ok) return '';
       const content = await response.text();
       return content.trim() || '';
@@ -820,11 +820,11 @@ export default {
             .run();
 
           const successMessage = await getVerificationSuccessMessage();
-          await sendMessageToUser(chatId, `${successMessage}\n你好，欢迎使用私聊机器人！现在可以发送消息了。`);
+          await sendMessageToUser(chatId, `${successMessage}\nYou can start messaging now.`);
           const userInfo = await getUserInfo(chatId);
           await ensureUserTopic(chatId, userInfo);
         } else {
-          await sendMessageToUser(chatId, '验证失败，请重新尝试。');
+          await sendMessageToUser(chatId, 'Verification failed, please try again.');
           await handleVerification(chatId, messageId);
         }
 
