@@ -760,7 +760,7 @@ export default {
         const nowSeconds = Math.floor(Date.now() / 1000);
 
         if (!storedCode || (codeExpiry && nowSeconds > codeExpiry)) {
-          await sendMessageToUser(chatId, '验证码已过期，正在为您发送新的验证码...');
+          await sendMessageToUser(chatId, 'The verification code has expired. A new verification code is being sent to you.');
           await env.D1.prepare('UPDATE user_states SET verification_code = NULL, code_expiry = NULL, is_verifying = FALSE WHERE chat_id = ?')
             .bind(chatId)
             .run();
