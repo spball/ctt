@@ -1003,7 +1003,7 @@ export default {
           callback_data: `verify_${chatId}_${option}_${option === correctResult ? 'correct' : 'wrong'}`
         }));
 
-        const question = `请计算：${num1} ${operation} ${num2} = ?（点击下方按钮完成验证）`;
+        const question = `Verification: ${num1} ${operation} ${num2} = ? (Please select answer)`;
         const nowSeconds = Math.floor(Date.now() / 1000);
         const codeExpiry = nowSeconds + 300;
 
