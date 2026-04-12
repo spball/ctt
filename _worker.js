@@ -587,12 +587,12 @@ export default {
 
     async function getVerificationSuccessMessage() {
       const userRawEnabled = (await getSetting('user_raw_enabled', env.D1)) === 'true';
-      if (!userRawEnabled) return 'Verification successful! You can start messaging now.';
+      if (!userRawEnabled) return '';
 
       const response = await fetch('https://raw.githubusercontent.com/spball/ctt/refs/heads/main/CFTeleTrans/start.md');
-      if (!response.ok) return 'Verification successful! You can start messaging now.';
+      if (!response.ok) return '';
       const message = await response.text();
-      return message.trim() || 'Verification successful! You can start messaging now.';
+      return message.trim() || '';
     }
 
     async function getNotificationContent() {
