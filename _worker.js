@@ -219,9 +219,34 @@ export function renderVerificationPage(siteKey, challengeToken) {
     }
 
     let waitedMs = 0;
+    let probeRequested = false;
+    let scriptStatus = 'pending';
     const POLL_INTERVAL_MS = 200;
     const INIT_DATA_GRACE_MS = 3000;
+    const PROBE_AFTER_MS = 5000;
     const LOAD_TIMEOUT_MS = 15000;
+
+    function loadTurnstileScript() {
+      scriptStatus = 'pending';
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&t=' + Date.now();
+      script.async = true;
+      script.defer = true;
+      script.onload = () => { scriptStatus = 'loaded'; };
+      script.onerror = () => { scriptStatus = 'error'; };
+      document.head.appendChild(script);
+    }
+
+    function showLoadFailure() {
+      if (scriptStatus === 'error') {
+        setStatus('验证组件脚本请求被拦截：当前环境拒绝加载 challenges.cloudflare.com 的脚本。', 'error');
+      } else if (scriptStatus === 'loaded') {
+        setStatus('验证组件脚本已下载但未能初始化，请检查当前 WebView 的 Cookie / 本地存储权限后重试。', 'error');
+      } else {
+        setStatus('验证组件脚本请求超时（无响应）：当前环境无法访问 challenges.cloudflare.com。', 'error');
+      }
+      retryButton.hidden = false;
+    }
 
     function waitForTurnstile() {
       const hasInitData = Boolean(webApp && webApp.initData);
@@ -235,27 +260,23 @@ export function renderVerificationPage(siteKey, challengeToken) {
         setStatus('请从 Telegram Bot 中打开此页面。', 'error');
         return;
       }
+      if (!hasTurnstile && !probeRequested && waitedMs >= PROBE_AFTER_MS) {
+        probeRequested = true;
+        loadTurnstileScript();
+      }
       if (waitedMs >= LOAD_TIMEOUT_MS) {
-        setStatus('验证组件加载超时：当前网络无法访问 challenges.cloudflare.com。请检查代理、VPN、防火墙或广告拦截设置后重试。', 'error');
-        retryButton.hidden = false;
+        showLoadFailure();
         return;
       }
       setTimeout(waitForTurnstile, POLL_INTERVAL_MS);
-    }
-
-    function reloadTurnstileScript() {
-      const script = document.createElement('script');
-      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&t=' + Date.now();
-      script.async = true;
-      script.defer = true;
-      document.head.appendChild(script);
     }
 
     retryButton.addEventListener('click', () => {
       retryButton.hidden = true;
       setStatus('正在重新加载验证组件…');
       waitedMs = 0;
-      reloadTurnstileScript();
+      probeRequested = true;
+      loadTurnstileScript();
       waitForTurnstile();
     });
 
