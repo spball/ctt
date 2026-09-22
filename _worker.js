@@ -144,16 +144,18 @@ export function renderVerificationPage(siteKey, challengeToken) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>安全验证</title>
+  <link rel="preconnect" href="https://challenges.cloudflare.com">
   <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, -apple-system, sans-serif; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #111); }
     main { width: min(92vw, 420px); box-sizing: border-box; padding: 28px 20px; text-align: center; }
     h1 { margin: 0 0 10px; font-size: 24px; }
     p { margin: 0 0 22px; color: var(--tg-theme-hint-color, #667085); line-height: 1.5; }
-    #turnstile { min-height: 65px; display: flex; justify-content: center; }
-    #status { min-height: 24px; margin-top: 18px; font-weight: 600; }
+    #turnstile { min-height: 65px; }
+    #status { min-height: 24px; margin-top: 18px; font-weight: 600; overflow-wrap: anywhere; }
+    #retry { margin-top: 14px; padding: 10px 18px; font: inherit; font-weight: 600; color: var(--tg-theme-button-text-color, #fff); background: var(--tg-theme-button-color, #2481cc); border: 0; border-radius: 8px; cursor: pointer; }
     .error { color: #d92d20; }
     .success { color: #079455; }
   </style>
@@ -164,11 +166,13 @@ export function renderVerificationPage(siteKey, challengeToken) {
     <p>验证成功后即可继续与 Bot 对话。</p>
     <div id="turnstile"></div>
     <div id="status" role="status" aria-live="polite"></div>
+    <button id="retry" type="button" hidden>重新加载验证组件</button>
   </main>
   <script>
     const challenge = ${serializedChallenge};
     const webApp = window.Telegram && window.Telegram.WebApp;
     const statusElement = document.getElementById('status');
+    const retryButton = document.getElementById('retry');
     if (webApp) { webApp.ready(); webApp.expand(); }
 
     function setStatus(message, type = '') {
@@ -198,25 +202,64 @@ export function renderVerificationPage(siteKey, challengeToken) {
       }
     }
 
-    window.addEventListener('load', () => {
-      if (!webApp || !webApp.initData) {
+    function renderWidget() {
+      try {
+        window.turnstile.render('#turnstile', {
+          sitekey: ${serializedSiteKey},
+          action: '${TURNSTILE_ACTION}',
+          theme: 'auto',
+          size: 'flexible',
+          callback: completeVerification,
+          'error-callback': (code) => setStatus('验证组件加载失败（错误码 ' + code + '），请稍后重试。', 'error'),
+          'expired-callback': () => setStatus('验证已过期，请重新完成验证。', 'error')
+        });
+      } catch (error) {
+        setStatus('验证组件初始化失败：' + ((error && error.message) || '未知错误'), 'error');
+      }
+    }
+
+    let waitedMs = 0;
+    const POLL_INTERVAL_MS = 200;
+    const INIT_DATA_GRACE_MS = 3000;
+    const LOAD_TIMEOUT_MS = 15000;
+
+    function waitForTurnstile() {
+      const hasInitData = Boolean(webApp && webApp.initData);
+      const hasTurnstile = Boolean(window.turnstile && typeof window.turnstile.render === 'function');
+      if (hasInitData && hasTurnstile) {
+        renderWidget();
+        return;
+      }
+      waitedMs += POLL_INTERVAL_MS;
+      if (!hasInitData && waitedMs >= INIT_DATA_GRACE_MS) {
         setStatus('请从 Telegram Bot 中打开此页面。', 'error');
         return;
       }
-      if (!window.turnstile) {
-        setStatus('验证组件未能加载，请稍后重试。', 'error');
+      if (waitedMs >= LOAD_TIMEOUT_MS) {
+        setStatus('验证组件加载超时：当前网络无法访问 challenges.cloudflare.com。请检查代理、VPN、防火墙或广告拦截设置后重试。', 'error');
+        retryButton.hidden = false;
         return;
       }
-      window.turnstile.render('#turnstile', {
-        sitekey: ${serializedSiteKey},
-        action: '${TURNSTILE_ACTION}',
-        theme: 'auto',
-        size: 'flexible',
-        callback: completeVerification,
-        'error-callback': () => setStatus('组件加载失败，请稍后重试。', 'error'),
-        'expired-callback': () => setStatus('验证已过期，请重新完成验证。', 'error')
-      });
+      setTimeout(waitForTurnstile, POLL_INTERVAL_MS);
+    }
+
+    function reloadTurnstileScript() {
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&t=' + Date.now();
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+
+    retryButton.addEventListener('click', () => {
+      retryButton.hidden = true;
+      setStatus('正在重新加载验证组件…');
+      waitedMs = 0;
+      reloadTurnstileScript();
+      waitForTurnstile();
     });
+
+    waitForTurnstile();
   </script>
 </body>
 </html>`;
@@ -238,7 +281,7 @@ export function verificationPageResponse(html, status = 200) {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
-      'Content-Security-Policy': "default-src 'none'; script-src 'self' 'unsafe-inline' https://telegram.org https://challenges.cloudflare.com; style-src 'unsafe-inline'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; img-src data: https:; base-uri 'none'; form-action 'self'",
+      'Content-Security-Policy': "default-src 'none'; script-src 'self' 'unsafe-inline' https://telegram.org https://challenges.cloudflare.com; style-src 'unsafe-inline'; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; img-src data: https:; base-uri 'none'; form-action 'self'",
       'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff'
     }
