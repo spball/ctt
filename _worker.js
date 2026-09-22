@@ -153,7 +153,7 @@ export function renderVerificationPage(siteKey, challengeToken) {
     main { width: min(92vw, 420px); box-sizing: border-box; padding: 28px 20px; text-align: center; }
     h1 { margin: 0 0 10px; font-size: 24px; }
     p { margin: 0 0 22px; color: var(--tg-theme-hint-color, #667085); line-height: 1.5; }
-    #turnstile { min-height: 65px; }
+    #turnstile-widget { min-height: 65px; }
     #status { min-height: 24px; margin-top: 18px; font-weight: 600; overflow-wrap: anywhere; }
     #retry { margin-top: 14px; padding: 10px 18px; font: inherit; font-weight: 600; color: var(--tg-theme-button-text-color, #fff); background: var(--tg-theme-button-color, #2481cc); border: 0; border-radius: 8px; cursor: pointer; }
     .error { color: #d92d20; }
@@ -164,7 +164,7 @@ export function renderVerificationPage(siteKey, challengeToken) {
   <main>
     <h1>完成安全验证</h1>
     <p>验证成功后即可继续与 Bot 对话。</p>
-    <div id="turnstile"></div>
+    <div id="turnstile-widget"></div>
     <div id="status" role="status" aria-live="polite"></div>
     <button id="retry" type="button" hidden>重新加载验证组件</button>
   </main>
@@ -204,7 +204,7 @@ export function renderVerificationPage(siteKey, challengeToken) {
 
     function renderWidget() {
       try {
-        window.turnstile.render('#turnstile', {
+        window.turnstile.render('#turnstile-widget', {
           sitekey: ${serializedSiteKey},
           action: '${TURNSTILE_ACTION}',
           theme: 'auto',

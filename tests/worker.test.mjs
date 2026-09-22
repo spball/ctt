@@ -81,6 +81,12 @@ test('renders a Telegram Mini App with Turnstile and no secret key', () => {
   assert.doesNotMatch(html, /turnstile-secret/);
 });
 
+test('does not shadow the window.turnstile global with the widget container id', () => {
+  const html = renderVerificationPage('site-key-123', 'challenge-456');
+  assert.match(html, /id="turnstile-widget"/);
+  assert.doesNotMatch(html, /id="turnstile"/);
+});
+
 test('verification pages are non-cacheable and constrained by CSP', () => {
   const response = verificationPageResponse('<p>ok</p>');
   assert.equal(response.status, 200);
