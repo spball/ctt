@@ -54,6 +54,8 @@ Turnstile 客户端成功并不代表验证完成；Worker 会强制调用 Sitev
 | `TURNSTILE_SITE_KEY_ENV` | 是 | Turnstile Site Key | `0x4AAAA...` |
 | `TURNSTILE_SECRET_KEY_ENV` | 是 | Turnstile Secret Key，建议配置为 Secret | `0x4AAAA...` |
 | `MAX_MESSAGES_PER_MINUTE_ENV` | 否 | 单用户每分钟消息上限 | `40` |
+| `PUBLIC_BASE_URL_ENV` | 否 | 部署的固定公网地址，用于生成 Webhook 地址 | `https://ctt.example.xyz` |
+| `MAINTENANCE_TOKEN_ENV` | 否 | 维护端点的访问令牌；不配置时维护端点全部关闭 | 随机长字符串 |
 | `D1` | 是 | Cloudflare D1 绑定 | `cfteletrans-db` |
 
 ### 5. 部署与注册 Webhook
@@ -64,11 +66,21 @@ Turnstile 客户端成功并不代表验证完成；Worker 会强制调用 Sitev
 https://<你的域名>/webhook
 ```
 
-也可以手动访问以下维护端点：
+建议配置 `PUBLIC_BASE_URL_ENV` 固定公网地址。未配置时 Webhook 地址由请求的 `Origin` 推导，此时自动注册**不会覆盖已存在的 Webhook**，避免任意域名的请求把 Webhook 指到别处。
+
+维护端点需要携带 `MAINTENANCE_TOKEN_ENV` 配置的令牌，未配置该变量时所有维护端点返回 `503`：
 
 - `GET /registerWebhook`：重新注册 Webhook。
 - `GET /unRegisterWebhook`：移除 Webhook。
 - `GET /checkTables`：检查并补齐 D1 表结构。
+
+令牌通过请求头传递（推荐）：
+
+```bash
+curl -H "Authorization: Bearer <令牌>" https://<你的域名>/registerWebhook
+```
+
+也可以使用 `?token=<令牌>` 查询参数方便在浏览器中直接访问，但令牌会进入浏览器历史与访问日志，请自行权衡。
 
 Mini App 使用以下公开接口：
 
@@ -105,6 +117,7 @@ node --check _worker.js
 - Mini App 的 `initDataUnsafe` 不可信；本项目只在后端验证原始 `initData` 后使用用户身份。
 - Turnstile Token 由 Cloudflare Siteverify 校验，且挑战令牌在 D1 中一次性消费。
 - 管理员按钮同时校验发送者 ID、管理员私聊 ID、Thread 与用户映射。
+- Webhook 地址优先取 `PUBLIC_BASE_URL_ENV`，维护端点要求 `MAINTENANCE_TOKEN_ENV` 令牌且未配置时关闭。
 
 ## 致谢与许可
 

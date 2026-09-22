@@ -3,6 +3,8 @@ let ADMIN_CHAT_ID;
 let MAX_MESSAGES_PER_MINUTE;
 let TURNSTILE_SITE_KEY;
 let TURNSTILE_SECRET_KEY;
+let PUBLIC_BASE_URL;
+let MAINTENANCE_TOKEN;
 
 const VERIFICATION_TTL_SECONDS = 5 * 60;
 const VERIFIED_SESSION_SECONDS = 24 * 60 * 60;
@@ -49,8 +51,6 @@ class LRUCache {
 
 const userInfoCache = new LRUCache(1000);
 const topicIdCache = new LRUCache(1000);
-const userStateCache = new LRUCache(1000);
-const messageRateCache = new LRUCache(1000);
 
 const encoder = new TextEncoder();
 
@@ -65,6 +65,16 @@ function timingSafeEqual(left, right) {
     difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
   }
   return difference === 0;
+}
+
+export function normalizePublicBaseUrl(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 async function hmacSha256(key, value) {
@@ -315,6 +325,8 @@ export default {
     ADMIN_CHAT_ID = env.ADMIN_CHAT_ID_ENV ? String(env.ADMIN_CHAT_ID_ENV) : null;
     TURNSTILE_SITE_KEY = env.TURNSTILE_SITE_KEY_ENV || null;
     TURNSTILE_SECRET_KEY = env.TURNSTILE_SECRET_KEY_ENV || null;
+    PUBLIC_BASE_URL = normalizePublicBaseUrl(env.PUBLIC_BASE_URL_ENV);
+    MAINTENANCE_TOKEN = env.MAINTENANCE_TOKEN_ENV ? String(env.MAINTENANCE_TOKEN_ENV) : null;
     const configuredRateLimit = env.MAX_MESSAGES_PER_MINUTE_ENV ? parseInt(env.MAX_MESSAGES_PER_MINUTE_ENV, 10) : 40;
     MAX_MESSAGES_PER_MINUTE = Number.isFinite(configuredRateLimit) && configuredRateLimit > 0 ? configuredRateLimit : 40;
 
@@ -355,15 +367,33 @@ export default {
           console.error(`Webhook processing failed: ${error.message}`);
           return new Response('Bad Request', { status: 400 });
         }
-      } else if (url.pathname === '/registerWebhook') {
-        return await registerWebhook(request);
-      } else if (url.pathname === '/unRegisterWebhook') {
-        return await unRegisterWebhook();
-      } else if (url.pathname === '/checkTables') {
+      } else if (['/registerWebhook', '/unRegisterWebhook', '/checkTables'].includes(url.pathname)) {
+        if (!MAINTENANCE_TOKEN) {
+          return new Response('Maintenance endpoints are disabled: MAINTENANCE_TOKEN_ENV is not configured', { status: 503 });
+        }
+        if (!isMaintenanceAuthorized(request, url)) {
+          return new Response('Unauthorized', { status: 401 });
+        }
+        if (url.pathname === '/registerWebhook') return await registerWebhook(request);
+        if (url.pathname === '/unRegisterWebhook') return await unRegisterWebhook();
         await checkAndRepairTables(env.D1);
         return new Response('Database tables checked and repaired', { status: 200 });
       }
       return new Response('Not Found', { status: 404 });
+    }
+
+    function isMaintenanceAuthorized(request, url) {
+      const authorization = request.headers.get('Authorization') || '';
+      const bearer = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+      const provided = bearer
+        || request.headers.get('X-Maintenance-Token')
+        || url.searchParams.get('token')
+        || '';
+      return timingSafeEqual(provided, MAINTENANCE_TOKEN);
+    }
+
+    function resolveWebhookUrl(request) {
+      return `${PUBLIC_BASE_URL || new URL(request.url).origin}/webhook`;
     }
 
     async function initialize(d1, request) {
@@ -381,7 +411,10 @@ export default {
     }
 
     async function autoRegisterWebhook(request) {
-      const webhookUrl = `${new URL(request.url).origin}/webhook`;
+      const webhookUrl = resolveWebhookUrl(request);
+      const currentWebhook = await telegramApi('getWebhookInfo').catch(() => null);
+      if (currentWebhook?.url === webhookUrl) return;
+      if (!PUBLIC_BASE_URL && currentWebhook?.url) return;
       await fetchWithRetry(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -632,12 +665,6 @@ export default {
         ).bind(challengeRecord.chat_id, nowSeconds * 1000)
       ]);
 
-      const refreshedState = await env.D1.prepare(
-        'SELECT is_blocked, is_first_verification, is_verified, verified_expiry, is_verifying FROM user_states WHERE chat_id = ?'
-      ).bind(challengeRecord.chat_id).first();
-      userStateCache.set(challengeRecord.chat_id, refreshedState);
-      messageRateCache.set(challengeRecord.chat_id, { message_count: 0, window_start: nowSeconds * 1000 });
-
       if (challengeRecord.last_verification_message_id) {
         try {
           await telegramApi('deleteMessage', {
@@ -724,18 +751,14 @@ export default {
         return;
       }
 
-      let userState = userStateCache.get(chatId);
-      if (userState === undefined) {
-        userState = await env.D1.prepare('SELECT is_blocked, is_first_verification, is_verified, verified_expiry, is_verifying FROM user_states WHERE chat_id = ?')
-          .bind(chatId)
-          .first();
-        if (!userState) {
-          userState = { is_blocked: false, is_first_verification: true, is_verified: false, verified_expiry: null, is_verifying: false };
-          await env.D1.prepare('INSERT INTO user_states (chat_id, is_blocked, is_first_verification, is_verified, is_verifying) VALUES (?, ?, ?, ?, ?)')
-            .bind(chatId, false, true, false, false)
-            .run();
-        }
-        userStateCache.set(chatId, userState);
+      let userState = await env.D1.prepare('SELECT is_blocked, is_first_verification, is_verified, verified_expiry, is_verifying FROM user_states WHERE chat_id = ?')
+        .bind(chatId)
+        .first();
+      if (!userState) {
+        userState = { is_blocked: false, is_first_verification: true, is_verified: false, verified_expiry: null, is_verifying: false };
+        await env.D1.prepare('INSERT INTO user_states (chat_id, is_blocked, is_first_verification, is_verified, is_verifying) VALUES (?, ?, ?, ?, ?)')
+          .bind(chatId, false, true, false, false)
+          .run();
       }
 
       if (userState.is_blocked) {
@@ -877,8 +900,6 @@ export default {
         env.D1.prepare('DELETE FROM message_rates WHERE chat_id = ?').bind(targetChatId),
         env.D1.prepare('DELETE FROM chat_topic_mappings WHERE chat_id = ?').bind(targetChatId)
       ]);
-      userStateCache.set(targetChatId, undefined);
-      messageRateCache.set(targetChatId, undefined);
       topicIdCache.set(topicCacheKey(targetChatId), undefined);
       await sendMessageToTopic(topicId, `用户 ${targetChatId} 的状态已重置。`);
     }
@@ -973,36 +994,25 @@ export default {
       const window = 5 * 60 * 1000;
       const maxStartsPerWindow = 1;
 
-      let data = messageRateCache.get(chatId) || {};
-      if (!Number.isFinite(data.start_count) || !Number.isFinite(data.start_window_start)) {
-        const storedData = await env.D1.prepare('SELECT start_count, start_window_start FROM message_rates WHERE chat_id = ?')
-          .bind(chatId)
-          .first();
-        data = {
-          ...data,
-          start_count: Number.isFinite(storedData?.start_count) ? storedData.start_count : 0,
-          start_window_start: Number.isFinite(storedData?.start_window_start) ? storedData.start_window_start : now
-        };
-        await env.D1.prepare(
-          `INSERT INTO message_rates (chat_id, start_count, start_window_start) VALUES (?, ?, ?)
-           ON CONFLICT(chat_id) DO UPDATE SET start_count = excluded.start_count, start_window_start = excluded.start_window_start`
-        ).bind(chatId, data.start_count, data.start_window_start).run();
-      }
+      const storedData = await env.D1.prepare('SELECT start_count, start_window_start FROM message_rates WHERE chat_id = ?')
+        .bind(chatId)
+        .first();
+      const data = {
+        start_count: Number.isFinite(storedData?.start_count) ? storedData.start_count : 0,
+        start_window_start: Number.isFinite(storedData?.start_window_start) ? storedData.start_window_start : now
+      };
 
       if (now - data.start_window_start > window) {
         data.start_count = 1;
         data.start_window_start = now;
-        await env.D1.prepare('UPDATE message_rates SET start_count = ?, start_window_start = ? WHERE chat_id = ?')
-          .bind(data.start_count, data.start_window_start, chatId)
-          .run();
       } else {
         data.start_count += 1;
-        await env.D1.prepare('UPDATE message_rates SET start_count = ? WHERE chat_id = ?')
-          .bind(data.start_count, chatId)
-          .run();
       }
 
-      messageRateCache.set(chatId, data);
+      await env.D1.prepare(
+        `INSERT INTO message_rates (chat_id, start_count, start_window_start) VALUES (?, ?, ?)
+         ON CONFLICT(chat_id) DO UPDATE SET start_count = excluded.start_count, start_window_start = excluded.start_window_start`
+      ).bind(chatId, data.start_count, data.start_window_start).run();
       return data.start_count > maxStartsPerWindow;
     }
 
@@ -1010,21 +1020,13 @@ export default {
       const now = Date.now();
       const window = 60 * 1000;
 
-      let data = messageRateCache.get(chatId) || {};
-      if (!Number.isFinite(data.message_count) || !Number.isFinite(data.window_start)) {
-        const storedData = await env.D1.prepare('SELECT message_count, window_start FROM message_rates WHERE chat_id = ?')
-          .bind(chatId)
-          .first();
-        data = {
-          ...data,
-          message_count: Number.isFinite(storedData?.message_count) ? storedData.message_count : 0,
-          window_start: Number.isFinite(storedData?.window_start) ? storedData.window_start : now
-        };
-        await env.D1.prepare(
-          `INSERT INTO message_rates (chat_id, message_count, window_start) VALUES (?, ?, ?)
-           ON CONFLICT(chat_id) DO UPDATE SET message_count = excluded.message_count, window_start = excluded.window_start`
-        ).bind(chatId, data.message_count, data.window_start).run();
-      }
+      const storedData = await env.D1.prepare('SELECT message_count, window_start FROM message_rates WHERE chat_id = ?')
+        .bind(chatId)
+        .first();
+      const data = {
+        message_count: Number.isFinite(storedData?.message_count) ? storedData.message_count : 0,
+        window_start: Number.isFinite(storedData?.window_start) ? storedData.window_start : now
+      };
 
       if (now - data.window_start > window) {
         data.message_count = 1;
@@ -1033,10 +1035,10 @@ export default {
         data.message_count += 1;
       }
 
-      messageRateCache.set(chatId, data);
-      await env.D1.prepare('UPDATE message_rates SET message_count = ?, window_start = ? WHERE chat_id = ?')
-        .bind(data.message_count, data.window_start, chatId)
-        .run();
+      await env.D1.prepare(
+        `INSERT INTO message_rates (chat_id, message_count, window_start) VALUES (?, ?, ?)
+         ON CONFLICT(chat_id) DO UPDATE SET message_count = excluded.message_count, window_start = excluded.window_start`
+      ).bind(chatId, data.message_count, data.window_start).run();
       return data.message_count > MAX_MESSAGES_PER_MINUTE;
     }
 
@@ -1060,7 +1062,6 @@ export default {
             .bind(true, verifiedExpiry, false, false)
             .run();
           await env.D1.prepare('DELETE FROM verification_challenges').run();
-          userStateCache.clear();
         }
       } else if (key === 'user_raw_enabled') {
         settingsCache.set('user_raw_enabled', value === 'true');
@@ -1123,16 +1124,12 @@ export default {
           `INSERT INTO user_states (chat_id, is_blocked) VALUES (?, TRUE)
            ON CONFLICT(chat_id) DO UPDATE SET is_blocked = TRUE`
         ).bind(privateChatId).run();
-        const state = userStateCache.get(privateChatId);
-        if (state) userStateCache.set(privateChatId, { ...state, is_blocked: true });
         await sendMessageToTopic(topicId, `用户 ${privateChatId} 已被拉黑，消息将不再转发。`);
       } else if (action === 'unblock') {
         await env.D1.prepare(
           `INSERT INTO user_states (chat_id, is_blocked, is_first_verification) VALUES (?, FALSE, TRUE)
            ON CONFLICT(chat_id) DO UPDATE SET is_blocked = FALSE, is_first_verification = TRUE`
         ).bind(privateChatId).run();
-        const state = userStateCache.get(privateChatId);
-        if (state) userStateCache.set(privateChatId, { ...state, is_blocked: false, is_first_verification: true });
         await sendMessageToTopic(topicId, `用户 ${privateChatId} 已解除拉黑，消息将继续转发。`);
       } else if (action === 'toggle_verification') {
         const currentState = (await getSetting('verification_enabled', env.D1)) === 'true';
@@ -1151,8 +1148,6 @@ export default {
         await setSetting('user_raw_enabled', newState.toString());
         await sendMessageToTopic(topicId, `用户端 Raw 链接已${newState ? '开启' : '关闭'}。`);
       } else if (action === 'delete_user') {
-        userStateCache.set(privateChatId, undefined);
-        messageRateCache.set(privateChatId, undefined);
         topicIdCache.set(topicCacheKey(privateChatId), undefined);
         await env.D1.batch([
           env.D1.prepare('DELETE FROM verification_challenges WHERE chat_id = ?').bind(privateChatId),
@@ -1219,19 +1214,11 @@ export default {
         await env.D1.prepare(
           'UPDATE user_states SET last_verification_message_id = ? WHERE chat_id = ?'
         ).bind(String(sentMessage.message_id), chatId).run();
-        const currentState = userStateCache.get(chatId) || {};
-        userStateCache.set(chatId, {
-          ...currentState,
-          is_verifying: true,
-          last_verification_message_id: String(sentMessage.message_id)
-        });
       } catch (error) {
         await env.D1.batch([
           env.D1.prepare('DELETE FROM verification_challenges WHERE token_hash = ?').bind(tokenHash),
           env.D1.prepare('UPDATE user_states SET is_verifying = FALSE WHERE chat_id = ?').bind(chatId)
         ]);
-        const currentState = userStateCache.get(chatId);
-        if (currentState) userStateCache.set(chatId, { ...currentState, is_verifying: false });
         throw error;
       }
     }
@@ -1418,7 +1405,7 @@ export default {
     }
 
     async function registerWebhook(request) {
-      const webhookUrl = `${new URL(request.url).origin}/webhook`;
+      const webhookUrl = resolveWebhookUrl(request);
       const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

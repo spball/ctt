@@ -7,6 +7,7 @@ const workerSource = await readFile(new URL('../_worker.js', import.meta.url), '
 const workerModule = await import(`data:text/javascript;base64,${Buffer.from(workerSource).toString('base64')}`);
 
 const {
+  normalizePublicBaseUrl,
   renderVerificationPage,
   sha256Hex,
   validateTelegramInitData,
@@ -271,6 +272,7 @@ test('runs first verification, creates one private admin Thread, and rejects rep
     if (href.includes('raw.githubusercontent.com')) return new Response('Ready');
     const method = href.split('/').at(-1);
     if (method === 'getMe') return Response.json({ ok: true, result: { id: 7, has_topics_enabled: true } });
+    if (method === 'getWebhookInfo') return Response.json({ ok: true, result: { url: '' } });
     if (method === 'getChat') {
       const id = String(body.chat_id);
       return Response.json({ ok: true, result: id === '9001'
@@ -366,4 +368,136 @@ test('fails closed when required Worker bindings are missing', async () => {
   );
   assert.equal(response.status, 500);
   assert.match(await response.text(), /ADMIN_CHAT_ID_ENV/);
+});
+
+test('does not re-challenge a user whose verification state was written by another request', async () => {
+  const database = new FakeD1();
+  database.settings.set('verification_enabled', 'true');
+  const calls = [];
+  let messageId = 500;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ href, body });
+    if (href.includes('raw.githubusercontent.com')) return new Response('Ready');
+    const method = href.split('/').at(-1);
+    if (method === 'getMe') return Response.json({ ok: true, result: { id: 7, has_topics_enabled: true } });
+    if (method === 'getWebhookInfo') return Response.json({ ok: true, result: { url: '' } });
+    if (method === 'getChat') {
+      const id = String(body.chat_id);
+      return Response.json({ ok: true, result: id === '9001'
+        ? { id: 9001, type: 'private', first_name: 'Admin' }
+        : { id: 4242, type: 'private', first_name: 'Test', username: 'tester' } });
+    }
+    if (method === 'createForumTopic') return Response.json({ ok: true, result: { message_thread_id: 77 } });
+    if (method === 'sendMessage') return Response.json({ ok: true, result: { message_id: ++messageId } });
+    if (['setWebhook', 'deleteMessage', 'pinChatMessage', 'copyMessage', 'answerCallbackQuery'].includes(method)) {
+      return Response.json({ ok: true, result: true });
+    }
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  const env = {
+    BOT_TOKEN_ENV: botToken,
+    ADMIN_CHAT_ID_ENV: '9001',
+    TURNSTILE_SITE_KEY_ENV: 'site-key',
+    TURNSTILE_SECRET_KEY_ENV: 'secret-key',
+    D1: database
+  };
+
+  const sendUserMessage = (messageId, text) => workerModule.default.fetch(new Request('https://bot.example/webhook', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: { message_id: messageId, chat: { id: 4242 }, text } })
+  }), env);
+  const challengesToUser = () => calls.filter(call => (
+    call.href.endsWith('/sendMessage') && String(call.body.chat_id) === '4242' && call.body.reply_markup
+  ));
+
+  try {
+    await sendUserMessage(7101, 'hello');
+    assert.equal(challengesToUser().length, 1, 'an unverified user must be sent a verification challenge');
+
+    database.users.set('4242', {
+      is_blocked: false, is_first_verification: false, is_verified: true,
+      verified_expiry: Math.floor(Date.now() / 1000) + 3600, is_verifying: false,
+      last_verification_message_id: null
+    });
+    calls.length = 0;
+
+    await sendUserMessage(7102, 'hello again');
+
+    assert.equal(challengesToUser().length, 0, 'a verified user must not be challenged again');
+    assert.ok(
+      calls.some(call => call.href.endsWith('/sendMessage')
+        && String(call.body.chat_id) === '9001'
+        && String(call.body.text).includes('hello again')),
+      'the message must be forwarded to the admin topic'
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('normalizes the configured public base URL and rejects non-https values', () => {
+  assert.equal(normalizePublicBaseUrl('https://ctt.example/verify?x=1'), 'https://ctt.example');
+  assert.equal(normalizePublicBaseUrl('http://ctt.example'), null);
+  assert.equal(normalizePublicBaseUrl('not a url'), null);
+  assert.equal(normalizePublicBaseUrl(''), null);
+  assert.equal(normalizePublicBaseUrl(undefined), null);
+});
+
+test('maintenance endpoints require a token and honor the configured public base URL', async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ href, body });
+    if (href.includes('raw.githubusercontent.com')) return new Response('Ready');
+    const method = href.split('/').at(-1);
+    if (method === 'getMe') return Response.json({ ok: true, result: { id: 7, has_topics_enabled: true } });
+    if (method === 'getWebhookInfo') return Response.json({ ok: true, result: { url: '' } });
+    if (method === 'setWebhook') return Response.json({ ok: true, result: true });
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  const env = {
+    BOT_TOKEN_ENV: botToken,
+    ADMIN_CHAT_ID_ENV: '9001',
+    TURNSTILE_SITE_KEY_ENV: 'site-key',
+    TURNSTILE_SECRET_KEY_ENV: 'secret-key',
+    PUBLIC_BASE_URL_ENV: 'https://ctt.example',
+    D1: new FakeD1()
+  };
+  const withToken = { ...env, MAINTENANCE_TOKEN_ENV: 's3cret' };
+  const lastSetWebhook = () => calls.filter(call => call.href.endsWith('/setWebhook')).at(-1);
+
+  try {
+    const disabled = await workerModule.default.fetch(new Request('https://bot.example/registerWebhook'), env);
+    assert.equal(disabled.status, 503);
+
+    const missingToken = await workerModule.default.fetch(new Request('https://bot.example/registerWebhook'), withToken);
+    assert.equal(missingToken.status, 401);
+
+    const wrongToken = await workerModule.default.fetch(new Request('https://bot.example/checkTables?token=nope'), withToken);
+    assert.equal(wrongToken.status, 401);
+
+    const authorized = await workerModule.default.fetch(
+      new Request('https://bot.example/registerWebhook', { headers: { Authorization: 'Bearer s3cret' } }),
+      withToken
+    );
+    assert.equal(authorized.status, 200);
+    assert.equal(lastSetWebhook().body.url, 'https://ctt.example/webhook');
+
+    const viaQuery = await workerModule.default.fetch(
+      new Request('https://bot.example/registerWebhook?token=s3cret'),
+      { ...withToken, PUBLIC_BASE_URL_ENV: undefined }
+    );
+    assert.equal(viaQuery.status, 200);
+    assert.equal(lastSetWebhook().body.url, 'https://bot.example/webhook');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
