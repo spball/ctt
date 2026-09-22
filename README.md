@@ -14,7 +14,7 @@
 ## 工作流程
 
 1. 用户向 Bot 发送 `/start` 或任意消息。
-2. Bot 发送“开始验证”按钮，在 Telegram Mini App 中打开当前 Worker 的 `/verify` 页面。
+2. Bot 发送 “Start verification” 按钮，在 Telegram Mini App 中打开当前 Worker 的 `/verify` 页面。
 3. 用户完成 Turnstile；Worker 同时校验 Turnstile Siteverify、Telegram `initData` 和一次性挑战令牌。
 4. 验证成功后，Bot 在管理员私聊中创建用户专属 Thread，并置顶管理员面板。
 5. 用户消息进入该 Thread；管理员在 Thread 中回复即可转发给用户。

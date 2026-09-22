@@ -149,11 +149,11 @@ export function renderVerificationPage(siteKey, challengeToken) {
   const serializedSiteKey = JSON.stringify(String(siteKey)).replaceAll('<', '\\u003c');
   const serializedChallenge = JSON.stringify(String(challengeToken)).replaceAll('<', '\\u003c');
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>安全验证</title>
+  <title>Security check</title>
   <link rel="preconnect" href="https://challenges.cloudflare.com">
   <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
@@ -172,11 +172,11 @@ export function renderVerificationPage(siteKey, challengeToken) {
 </head>
 <body>
   <main>
-    <h1>完成安全验证</h1>
-    <p>验证成功后即可继续与 Bot 对话。</p>
+    <h1>Complete the security check</h1>
+    <p>You can continue chatting with the bot once verified.</p>
     <div id="turnstile-widget"></div>
     <div id="status" role="status" aria-live="polite"></div>
-    <button id="retry" type="button" hidden>重新加载验证组件</button>
+    <button id="retry" type="button" hidden>Reload verification widget</button>
   </main>
   <script>
     const challenge = ${serializedChallenge};
@@ -191,7 +191,7 @@ export function renderVerificationPage(siteKey, challengeToken) {
     }
 
     async function completeVerification(turnstileToken) {
-      setStatus('正在确认验证…');
+      setStatus('Confirming verification…');
       try {
         const response = await fetch('/api/verify', {
           method: 'POST',
@@ -203,11 +203,11 @@ export function renderVerificationPage(siteKey, challengeToken) {
           })
         });
         const result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || '验证失败');
-        setStatus('验证成功，可以返回聊天。', 'success');
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Verification failed');
+        setStatus('Verified. You can return to the chat.', 'success');
         if (webApp) setTimeout(() => webApp.close(), 900);
       } catch (error) {
-        setStatus(error.message || '验证失败，请重试。', 'error');
+        setStatus(error.message || 'Verification failed, please try again.', 'error');
         if (window.turnstile) window.turnstile.reset();
       }
     }
@@ -220,11 +220,11 @@ export function renderVerificationPage(siteKey, challengeToken) {
           theme: 'auto',
           size: 'flexible',
           callback: completeVerification,
-          'error-callback': (code) => setStatus('验证组件加载失败（错误码 ' + code + '），请稍后重试。', 'error'),
-          'expired-callback': () => setStatus('验证已过期，请重新完成验证。', 'error')
+          'error-callback': (code) => setStatus('Failed to load the verification widget (error code ' + code + '). Please try again later.', 'error'),
+          'expired-callback': () => setStatus('Verification expired. Please complete it again.', 'error')
         });
       } catch (error) {
-        setStatus('验证组件初始化失败：' + ((error && error.message) || '未知错误'), 'error');
+        setStatus('Failed to initialize the verification widget: ' + ((error && error.message) || 'unknown error'), 'error');
       }
     }
 
@@ -249,11 +249,11 @@ export function renderVerificationPage(siteKey, challengeToken) {
 
     function showLoadFailure() {
       if (scriptStatus === 'error') {
-        setStatus('验证组件脚本请求被拦截：当前环境拒绝加载 challenges.cloudflare.com 的脚本。', 'error');
+        setStatus('The verification script was blocked: this environment refused to load the script from challenges.cloudflare.com.', 'error');
       } else if (scriptStatus === 'loaded') {
-        setStatus('验证组件脚本已下载但未能初始化，请检查当前 WebView 的 Cookie / 本地存储权限后重试。', 'error');
+        setStatus('The verification script downloaded but could not initialize. Check the cookie and local storage permissions of this WebView, then try again.', 'error');
       } else {
-        setStatus('验证组件脚本请求超时（无响应）：当前环境无法访问 challenges.cloudflare.com。', 'error');
+        setStatus('The verification script request timed out with no response: this environment cannot reach challenges.cloudflare.com.', 'error');
       }
       retryButton.hidden = false;
     }
@@ -267,7 +267,7 @@ export function renderVerificationPage(siteKey, challengeToken) {
       }
       waitedMs += POLL_INTERVAL_MS;
       if (!hasInitData && waitedMs >= INIT_DATA_GRACE_MS) {
-        setStatus('请从 Telegram Bot 中打开此页面。', 'error');
+        setStatus('Please open this page from the Telegram bot.', 'error');
         return;
       }
       if (!hasTurnstile && !probeRequested && waitedMs >= PROBE_AFTER_MS) {
@@ -283,7 +283,7 @@ export function renderVerificationPage(siteKey, challengeToken) {
 
     retryButton.addEventListener('click', () => {
       retryButton.hidden = true;
-      setStatus('正在重新加载验证组件…');
+      setStatus('Reloading the verification widget…');
       waitedMs = 0;
       probeRequested = true;
       loadTurnstileScript();
@@ -345,7 +345,7 @@ export default {
       const url = new URL(request.url);
       if (url.pathname === '/verify' && request.method === 'GET') {
         const challenge = url.searchParams.get('challenge');
-        if (!challenge) return renderVerificationErrorPage('验证链接无效。', 400);
+        if (!challenge) return renderVerificationErrorPage('Invalid verification link.', 400);
 
         const tokenHash = await sha256Hex(challenge);
         const record = await env.D1.prepare(
@@ -353,7 +353,7 @@ export default {
         ).bind(tokenHash).first();
         const nowSeconds = Math.floor(Date.now() / 1000);
         if (!record || record.used_at || record.expires_at < nowSeconds) {
-          return renderVerificationErrorPage('验证链接已失效，请返回 Bot 获取新链接。', 410);
+          return renderVerificationErrorPage('This verification link has expired. Please return to the bot and request a new one.', 410);
         }
         return verificationPageResponse(renderVerificationPage(TURNSTILE_SITE_KEY, challenge));
       } else if (url.pathname === '/api/verify' && request.method === 'POST') {
@@ -406,7 +406,7 @@ export default {
     }
 
     function renderVerificationErrorPage(message, status) {
-      const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>安全验证</title></head><body><main><h1>无法验证</h1><p>${escapeHtml(message)}</p></main></body></html>`;
+      const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Security check</title></head><body><main><h1>Verification failed</h1><p>${escapeHtml(message)}</p></main></body></html>`;
       return verificationPageResponse(html, status);
     }
 
@@ -584,14 +584,14 @@ export default {
       try {
         payload = await verificationRequest.json();
       } catch {
-        return jsonResponse({ ok: false, error: '请求格式无效。' }, 400);
+        return jsonResponse({ ok: false, error: 'Invalid request format.' }, 400);
       }
 
       const challenge = typeof payload.challenge === 'string' ? payload.challenge : '';
       const turnstileToken = typeof payload.turnstileToken === 'string' ? payload.turnstileToken : '';
       const initData = typeof payload.initData === 'string' ? payload.initData : '';
       if (!challenge || !turnstileToken || !initData) {
-        return jsonResponse({ ok: false, error: '缺少验证数据。' }, 400);
+        return jsonResponse({ ok: false, error: 'Missing verification data.' }, 400);
       }
 
       const tokenHash = await sha256Hex(challenge);
@@ -604,10 +604,10 @@ export default {
       ).bind(tokenHash).first();
 
       if (!challengeRecord || challengeRecord.used_at || challengeRecord.expires_at < nowSeconds) {
-        return jsonResponse({ ok: false, error: '验证链接已失效，请返回 Bot 获取新链接。' }, 410);
+        return jsonResponse({ ok: false, error: 'This verification link has expired. Please return to the bot and request a new one.' }, 410);
       }
       if (challengeRecord.is_blocked) {
-        return jsonResponse({ ok: false, error: '此账户无法继续发送消息。' }, 403);
+        return jsonResponse({ ok: false, error: 'This account cannot send messages.' }, 403);
       }
 
       const telegramValidation = await validateTelegramInitData(
@@ -616,7 +616,7 @@ export default {
         challengeRecord.chat_id
       );
       if (!telegramValidation.valid) {
-        return jsonResponse({ ok: false, error: 'Telegram 身份验证失败，请从 Bot 重新打开。' }, 401);
+        return jsonResponse({ ok: false, error: 'Telegram identity verification failed. Please reopen this link from the bot.' }, 401);
       }
 
       const siteverifyResponse = await fetchWithRetry(
@@ -634,14 +634,14 @@ export default {
       );
       const siteverifyResult = await siteverifyResponse.json();
       if (!siteverifyResult.success || siteverifyResult.action !== TURNSTILE_ACTION) {
-        return jsonResponse({ ok: false, error: 'Turnstile 验证失败，请重试。' }, 400);
+        return jsonResponse({ ok: false, error: 'Turnstile verification failed. Please try again.' }, 400);
       }
 
       const claimResult = await env.D1.prepare(
         'UPDATE verification_challenges SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?'
       ).bind(nowSeconds, tokenHash, nowSeconds).run();
       if (!claimResult.meta?.changes) {
-        return jsonResponse({ ok: false, error: '该验证已被使用，请返回 Bot 获取新链接。' }, 409);
+        return jsonResponse({ ok: false, error: 'This verification has already been used. Please return to the bot and request a new one.' }, 409);
       }
 
       const verifiedExpiry = nowSeconds + VERIFIED_SESSION_SECONDS;
@@ -778,7 +778,7 @@ export default {
             'SELECT token_hash FROM verification_challenges WHERE chat_id = ? AND used_at IS NULL AND expires_at >= ? LIMIT 1'
           ).bind(chatId, nowSeconds).first();
           if (activeChallenge && userState.is_verifying) {
-            await sendMessageToUser(chatId, '请点击上方“开始验证”按钮完成安全验证。');
+            await sendMessageToUser(chatId, 'Tap the "Start verification" button above to complete the security check.');
             return;
           }
           await issueVerificationChallenge(chatId);
@@ -922,8 +922,7 @@ export default {
           { text: '查询黑名单', callback_data: `check_blocklist_${privateChatId}` }
         ],
         [
-          { text: userRawEnabled ? '关闭用户Raw' : '开启用户Raw', callback_data: `toggle_user_raw_${privateChatId}` },
-          { text: 'GitHub项目', url: 'https://github.com/iawooo/ctt' }
+          { text: userRawEnabled ? '关闭用户Raw' : '开启用户Raw', callback_data: `toggle_user_raw_${privateChatId}` }
         ],
         [
           { text: '删除用户', callback_data: `delete_user_${privateChatId}` }
@@ -1203,10 +1202,10 @@ export default {
         const verificationUrl = `${new URL(request.url).origin}/verify?challenge=${encodeURIComponent(challenge)}`;
         const sentMessage = await telegramApi('sendMessage', {
           chat_id: chatId,
-          text: '发送消息前，请先完成 Cloudflare Turnstile 安全验证。验证链接 5 分钟内有效。',
+          text: 'Please complete the Cloudflare Turnstile security check before sending messages. This link is valid for 5 minutes.',
           reply_markup: {
             inline_keyboard: [[
-              { text: '开始验证', web_app: { url: verificationUrl } }
+              { text: 'Start verification', web_app: { url: verificationUrl } }
             ]]
           }
         });
