@@ -4,7 +4,8 @@
   "description": "CFTeleTrans - Telegram message forwarding bot",
   "main": "index.js",
   "scripts": {
-    "generate-star-chart": "node scripts/generate-star-chart.js"
+    "generate-star-chart": "node scripts/generate-star-chart.js",
+    "test": "node --test tests/*.test.mjs"
   },
   "keywords": ["telegram", "bot", "cloudflare"],
   "author": "iawooo",

@@ -1,147 +1,111 @@
-# CFTeleTrans (CTT) - Telegram消息转发分组对话机器人（基于Cloudflare）
+# CFTeleTrans (CTT)
 
-这是一个基于Cloudflare Workers实现的Telegram消息转发分组对话机器人，代号 **CFTeleTrans (CTT)**，专注于将用户消息安全、高效地转发到后台群组，同时充分利用Cloudflare的免费额度（榨干CF大善人！）。该机器人支持用户验证、消息转发、频率限制、管理员管理等功能，适用于客服、社区管理等场景。
-## 2025.05.17更新：优化，添加检测更新功能。
-## 项目截图
+基于 Cloudflare Workers、D1 和 Telegram Bot API 的私聊消息转发机器人。外部用户通过 Bot 发消息，管理员在自己与 Bot 的私聊窗口中使用独立 Threads 处理每个用户的会话。
 
-以下是 CFTeleTrans 项目的截图： 
+## 功能
 
-![CFTeleTrans 截图](https://awtc.pp.ua/ctt.png)
+- Cloudflare Turnstile + Telegram Mini App 验证，不再使用算术验证码。
+- 每个通过验证的用户在管理员私聊中对应一个独立 Thread。
+- Thread 首条置顶消息同时展示用户资料和可操作的管理员面板。
+- 支持文本、图片、文件等 Telegram 可复制消息的双向转发。
+- 支持拉黑、解除拉黑、验证开关、黑名单查询、欢迎内容开关和删除用户。
+- D1 持久化验证状态、频率限制及用户与 Thread 的映射。
 
-## 特点与亮点
+## 工作流程
 
-1. **充分利用Cloudflare免费额度（榨干CF大善人！）**  
-   - **CFTeleTrans (CTT)** 完全基于Cloudflare Workers部署，利用其免费额度（每天10万次请求，50次/分钟）实现高性能、低成本的机器人运行。
-   - **使用Cloudflare D1存储用户状态和数据，免费额度（每天10万次读/写）足以支持中小规模用户群。**
-   - 避免用别人的，受他人控制，（避免了突然植入广告，触不及防）该项目完全开源自己所有，可以自由修改代码的机器人
-   - 零成本运行，适合个人开发者或小型团队，真正做到“榨干CF大善人”的免费资源！
+1. 用户向 Bot 发送 `/start` 或任意消息。
+2. Bot 发送“开始验证”按钮，在 Telegram Mini App 中打开当前 Worker 的 `/verify` 页面。
+3. 用户完成 Turnstile；Worker 同时校验 Turnstile Siteverify、Telegram `initData` 和一次性挑战令牌。
+4. 验证成功后，Bot 在管理员私聊中创建用户专属 Thread，并置顶管理员面板。
+5. 用户消息进入该 Thread；管理员在 Thread 中回复即可转发给用户。
 
-2. **分组对话消息管理**  
-   - 用户消息自动转发到后台群组的子论坛，别人私聊你机器人就如同添加了你好友，。
-   - 群聊可多个号回复用户（只需将你的号拉进群并设置管理）
-   - 置顶消息显示用户信息（昵称、用户名、UserID、发起时间）及通知内容
-   - 每个用户独立一个分组，随时随地想聊就聊！
-   - 可通过后台群组直接回复用户消息，消息会转发到用户私聊。
-  
-3. **高效的用户验证机制**  
-   - 支持按钮式验证码验证（简单数学题），防止机器人刷消息。
-   - 验证状态持久化（1小时有效期），用户验证通过后无需重复验证，除非触发频率限制。
-   - 删除聊天记录后重新开始，验证码会自动触发，确保用户体验流畅。
+验证挑战 5 分钟内有效且只能使用一次。验证通过状态默认保持 24 小时；用户触发消息频率限制后需要重新验证。验证期间发送的消息不会排队或补发。
 
-4. **消息频率限制（防刷保护）**  
-   - 默认每分钟40条消息上限（可通过环境变量调整），超过限制的用户需重新验证。
-   - 有效防止恶意刷消息，保护后台群组和cf免费额度。
+## 部署准备
 
-5. **管理员面板功能**  
-   - 支持`/admin`呼出管理员面板控制，简单方便。
-   - 支持拉黑用户，查询黑名单，关闭用户Raw，删除用户等多种功能。
+### 1. 创建 Telegram Bot
 
-6. **轻量级部署**  
-   - 单文件部署（仅需一个`_worker.js`），代码简洁，易于维护。
-   - 支持Cloudflare Workers和Cloudflare Pages部署，部署过程简单。
+1. 使用 [@BotFather](https://t.me/BotFather) 创建 Bot 并保存 Token。
+2. 在 Bot 设置中启用私聊 Topics 模式。部署后可通过 `getMe` 返回的 `has_topics_enabled` 确认。
+3. 将 Worker 的 HTTPS 域名配置为 Bot 的 Mini App/Web App 域名。
+4. 管理员必须先主动打开 Bot 并发送一次 `/start`，否则 Bot 无法访问管理员私聊。
+5. 获取管理员本人的 Telegram User ID，作为 `ADMIN_CHAT_ID_ENV`。这里不能填写群组 ID。
 
-## 部署教程
+本版本不再需要后台群组，也不再使用 `GROUP_ID_ENV`。
 
-### 准备工作
-1. **创建Telegram Bot**：
-   - 在Telegram中找到`@BotFather`，发送`/newbot`创建新机器人。
-   - 按照提示设置机器人名称和用户名，获取Bot Token（例如`123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`）。
-   - 发送`/setinline`切换内联模式。
-![CFTeleTrans 截图](picture/0903f76329b80fc231893abde40b9ab8.png)
+### 2. 创建 Turnstile Widget
 
-2. **创建后台群组**：
-   - 创建一个Telegram群组（按需设置是否公开），
-   - 群组的“话题功能”打开。
-   - 添加机器人为管理员，建议权限全给（消息管理，话题管理）
-   - 获取群组的Chat ID（例如`-100123456789`），可以通过`@getidsbot`获取（拉它进群）。
+1. 在 Cloudflare 控制台创建 Turnstile Widget。
+2. 将 Worker 的 `workers.dev` 域名或自定义域名加入允许的 Hostname。
+3. 保存 Site Key 和 Secret Key。
 
-### 部署到Cloudflare Workers
+Turnstile 客户端成功并不代表验证完成；Worker 会强制调用 Siteverify 进行服务端校验。
 
-#### 步骤 1：创建D1 SQL数据库
-1. 登录[Cloudflare仪表板](https://dash.cloudflare.com/)。
-2. 导航到 **存储和数据库 > D1 SQL数据库**，输入一个名称（例如`cfteletrans-db`），点击 **创建**。
+### 3. 创建并绑定 D1
 
-#### 步骤 2：创建Workers项目
-1. 登录[Cloudflare仪表板](https://dash.cloudflare.com/)。
-2. 导航到 **Workers和Pages > Workers和Pages**，点击 **创建**。
-3. 点击 **Hello world**，输入一个名称（例如`cfteletrans`），再点击 **部署**
+创建 D1 数据库并以变量名 `D1` 绑定到 Worker。数据库表和新增字段会在 Worker 初始化时自动创建或补齐。
 
-#### 步骤 3：配置环境变量
-1. 在创建的Workers项目 **设置 > 变量和机密** 中，添加以下变量：
-- `BOT_TOKEN_ENV`：您的Telegram Bot Token（例如`123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`）。
-- `GROUP_ID_ENV`：后台群组的Chat ID（例如`-100123456789`）。
-- `MAX_MESSAGES_PER_MINUTE_ENV`：消息频率限制（例如`40`）。
+### 4. 配置环境变量
 
-#### 步骤 4：绑定D1 SQL数据库
-1. 在创建的Workers项目 **设置 > 绑定** 中，绑定数据库：
-- 添加-选择D1数据库
-- 变量名称 `D1`
-- D1 数据库 选择刚建的数据库（例如`cfteletrans-db`），
-- 点击 **编辑代码**，把原来的代码用本项目中的_worker.js代码替换后部署
+| 变量 | 必需 | 说明 | 示例 |
+| --- | --- | --- | --- |
+| `BOT_TOKEN_ENV` | 是 | Telegram Bot Token | `123456:ABC...` |
+| `ADMIN_CHAT_ID_ENV` | 是 | 单一管理员的 Telegram User ID | `123456789` |
+| `TURNSTILE_SITE_KEY_ENV` | 是 | Turnstile Site Key | `0x4AAAA...` |
+| `TURNSTILE_SECRET_KEY_ENV` | 是 | Turnstile Secret Key，建议配置为 Secret | `0x4AAAA...` |
+| `MAX_MESSAGES_PER_MINUTE_ENV` | 否 | 单用户每分钟消息上限 | `40` |
+| `D1` | 是 | Cloudflare D1 绑定 | `cfteletrans-db` |
 
-#### 步骤 5：测试
-1. 在Telegram中找到您的机器人，发送`/start`。
-2. 确认收到“你好，欢迎使用私聊机器人！”并触发验证码。
-3. 完成验证，确认收到合并消息，例如：
-4. 发送消息，确认消息转发到后台群组的子论坛。
+### 5. 部署与注册 Webhook
 
+将 `_worker.js` 部署为 Cloudflare Worker 或 Pages Advanced Mode Worker。首次请求会自动检查数据库、验证 Bot 配置并将 Webhook 注册到：
 
-## 需要在 Cloudflare 绑定的变量表
+```text
+https://<你的域名>/webhook
+```
 
-以下是项目中需要在 Cloudflare 环境中绑定的变量及其说明：
+也可以手动访问以下维护端点：
 
-| **变量名**                  | **类型**   | **描述**                                                                 | **默认值/示例**            |
-|-----------------------------|------------|--------------------------------------------------------------------------|----------------------------|
-| `BOT_TOKEN_ENV`            | 环境变量   | Telegram Bot 的 Token，用于与 Telegram API 通信。                        | `your-telegram-bot-token`  |
-| `GROUP_ID_ENV`             | 环境变量   | Telegram 群组的 ID，用于消息转发和客服回复。                             | `-123456789`               |
-| `MAX_MESSAGES_PER_MINUTE_ENV` | 环境变量 | 每分钟允许的最大消息数，用于限制用户发送频率。                           | `40`                       |
-| `D1`                       | D1 绑定    | Cloudflare D1 数据库绑定，用于存储用户状态、消息频率和群组映射。         | `cfteletrans-db`           |
+- `GET /registerWebhook`：重新注册 Webhook。
+- `GET /unRegisterWebhook`：移除 Webhook。
+- `GET /checkTables`：检查并补齐 D1 表结构。
 
+Mini App 使用以下公开接口：
 
-### 部署到Cloudflare pages
+- `GET /verify?challenge=...`：显示 Turnstile 页面。
+- `POST /api/verify`：完成 Telegram 身份和 Turnstile 服务端校验。
 
-#### **fork本项目**！！！
+## 管理员使用
 
-#### 步骤 1：创建pages项目
-1. 登录[Cloudflare仪表板](https://dash.cloudflare.com/)。
-2. 导航到 **Workers和Pages > Workers和Pages**，选择pages，点击 **创建**。
-3. 连接GitHub部署（或者下载本项目zip部署）
+- 用户验证成功后，管理员私聊中会自动出现以用户昵称命名的 Thread。
+- 置顶面板包含用户昵称、用户名、User ID、接入时间和管理按钮。
+- 在 Thread 中发送普通消息或媒体即可回复该用户。
+- 发送 `/admin` 可重新显示或刷新置顶面板。
+- `删除用户` 会删除用户状态、验证挑战、映射和对应 Thread；用户下次发起会话时会重新验证。
 
-#### 步骤 2：填写变量后重试部署
-![变量截图](picture/30d4b767f1c9a050999b8642f164c90c.png)
+## 从群组 Threads 版本升级
 
+- 新增 `ADMIN_CHAT_ID_ENV` 以及两个 Turnstile Key，删除 `GROUP_ID_ENV` 配置。
+- 在 BotFather 中启用私聊 Topics，并确保管理员已与 Bot 发起私聊。
+- 旧 `chat_topic_mappings` 数据会保留，但因为没有管理员私聊范围标记而自动失效。
+- 用户下一次验证或发消息时会在管理员私聊中惰性创建新 Thread，不会批量迁移旧群组消息。
 
-## 灵感来源
-本项目的灵感来源于 Telegram-interactive-bot(部署在服务器)
+## 本地检查
 
-- [Telegram-interactive-bot](https://github.com/MiHaKun/Telegram-interactive-bot)
+```bash
+npm test
+node --check _worker.js
+```
 
-## 参考文献
+测试覆盖 Telegram Mini App 签名和时效校验、跨用户拒绝、挑战令牌哈希、Turnstile 页面内容及安全响应头。
 
-在开发过程中，以下资源提供了宝贵的参考和指导：
+## 安全说明
 
-- [NodeSeek 帖子](https://www.nodeseek.com/post-237769-1)
+- 不要将 Bot Token 或 Turnstile Secret 提交到仓库。
+- Mini App 的 `initDataUnsafe` 不可信；本项目只在后端验证原始 `initData` 后使用用户身份。
+- Turnstile Token 由 Cloudflare Siteverify 校验，且挑战令牌在 D1 中一次性消费。
+- 管理员按钮同时校验发送者 ID、管理员私聊 ID、Thread 与用户映射。
 
-## 致谢
-- 特别感谢 [VTEXS](https://vtexs.com/) 赞助本项目，感谢 [VTEXS](https://vtexs.com/)为开源社区提供算力支持！
-- [![Powered by DartNode](https://dartnode.com/branding/DN-Open-Source-sm.png)](https://dartnode.com "Powered by DartNode - Free VPS for Open Source")
-- 特别感谢 [xAI](https://x.ai/) 提供的支持和灵感，帮助我完成了本项目的开发和优化！
-- 特别感谢 [cloud flare](https://www.cloudflare.com/) 大善人！
-- 再次感谢所有测试者、贡献者和社区支持！
+## 致谢与许可
 
-## 贡献
-
-欢迎提交 Issue 或 Pull Request！如果您有任何改进建议或新功能需求，请随时联系我。
-
-![Star 增长趋势](https://raw.githubusercontent.com/iawooo/StarCharts/refs/heads/main/images/ctt_star_chart.png)
-
-## 许可证
-
-本项目采用 MIT 许可证，详情请见 [LICENSE](LICENSE) 文件。
-
-## 声明
-
-- **尊重原创，转载须知**  
-  如需转载，请务必注明出处，感谢支持！严禁将本项目用于任何违法犯罪行为。  
-- **二次修改与发布**  
-  欢迎基于本项目进行二次开发，但请在发布时注明原始出处，共同维护开源社区的良好氛围。
+灵感来源于 Telegram-interactive-bot，并感谢原项目贡献者和社区测试者。项目许可证见 [LICENSE](LICENSE)。
